@@ -1,0 +1,21 @@
+{
+    "files.exclude": {
+        "**/*.o": true,
+        "**/*.map": true,
+        "**/*.iso": true,
+        "**/*.bin": true,
+        "**/*.cue": true,
+        "**/*.elf": true
+    },
+    "files.watcherExclude": {
+        "**/*.o": true,
+        "**/*.map": true,
+        "**/*.iso": true,
+        "**/*.bin": true,
+        "**/*.cue": true,
+        "**/*.elf": true
+    },
+    "files.associations": {
+        "aabb.h": "c"
+    }
+}

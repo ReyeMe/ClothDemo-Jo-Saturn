@@ -209,9 +209,39 @@ void MoveCloth()
     }
 }
 
-/** @brief Main demo loop
+/** @brief Fast normalizing of 3D vector (Thx GValiente for solution).
+ *  For more info about how it works see: https://math.stackexchange.com/questions/1282435/alpha-max-plus-beta-min-algorithm-for-three-numbers
+ *  And also: https://en.wikipedia.org/wiki/Alpha_max_plus_beta_min_algorithm
+ *  @param vector Vector to normalize
  */
-void DemoLogic()
+void FastVectorNormalize(jo_vector_fixed * vector)
+{
+    // Alpha is 0.9398086351723256
+    // Beta is 0.38928148272372454
+    // Gama is 0.2987061876143797
+
+    // Get absolute values of the vector components
+    jo_fixed x = JO_ABS(vector->x);
+    jo_fixed y = JO_ABS(vector->y);
+    jo_fixed z = JO_ABS(vector->z);
+
+    // Get min, mid, max
+    jo_fixed min = JO_MIN(x, JO_MIN(y, z));
+    jo_fixed max = JO_MAX(x, JO_MAX(y, z));
+    jo_fixed mid = min == x || max == x ? (min == y || max == y ? z : y) : x;
+    
+    // Aproximate vector length (alpha * max + beta * mid + gama * min)
+    jo_fixed length = JO_MAX(max, jo_fixed_mult(61591, max) + jo_fixed_mult(25512, mid) + jo_fixed_mult(19576, min));
+
+    // Normalize vector
+    vector->x = jo_fixed_div(vector->x, length);
+    vector->y = jo_fixed_div(vector->y, length);
+    vector->z = jo_fixed_div(vector->z, length);
+}
+
+/** @brief Simulate cloth
+ */
+void DemoClothSim()
 {
     // Update points
     int count = CLOTH_SIZE_W * CLOTH_SIZE_H;
@@ -269,11 +299,8 @@ void DemoLogic()
                 // Segment is overstretched
                 if (manhattanLength > Segments[segment].Length)
                 {
-                    // Calculate real length once we know that segment is overstretched
-                    jo_fixed length = jo_fixed_sqrt(jo_fixed_mult(dir.x, dir.x) + jo_fixed_mult(dir.y, dir.y) + jo_fixed_mult(dir.z, dir.z));
-                    dir.x = jo_fixed_div(dir.x, length);
-                    dir.y = jo_fixed_div(dir.y, length);
-                    dir.z = jo_fixed_div(dir.z, length);
+                    // Normalize segment vector
+                    FastVectorNormalize(&dir);
 
                     jo_vector_fixed segmentDir;
                     segmentDir.x = jo_fixed_mult(dir.x, Segments[segment].Length) >> 1;
@@ -301,7 +328,12 @@ void DemoLogic()
             }
         }
     }
-    
+}
+
+/** @brief Main demo loop
+ */
+void DemoLogic()
+{
     // Handle gamepad
     if (jo_is_pad1_available())
     {
@@ -344,6 +376,9 @@ void DemoLogic()
                 break;
         }
     }
+
+    // Do simulation
+    DemoClothSim();
 }
 
 /** @brief Redering loop

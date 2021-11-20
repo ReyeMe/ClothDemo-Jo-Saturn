@@ -4,11 +4,9 @@
 #include "mathex.h"
 
 /* Simulation stuff */
-#define CLOTH_SIZE_W (13)
-#define CLOTH_SIZE_H (5)
-#define CLOTH_SPACING JO_FIXED_8
-
-#define SIM_ITERATIONS (5)
+#define CLOTH_SIZE_W (21)
+#define CLOTH_SIZE_H (11)
+#define CLOTH_SPACING JO_FIXED_4
 
 /** @brief Phys point
  */
@@ -209,12 +207,13 @@ void MoveCloth()
     }
 }
 
-/** @brief Fast normalizing of 3D vector (Thx GValiente for solution).
+/** @brief Fast length of 3D vector (Thx GValiente for solution).
  *  For more info about how it works see: https://math.stackexchange.com/questions/1282435/alpha-max-plus-beta-min-algorithm-for-three-numbers
  *  And also: https://en.wikipedia.org/wiki/Alpha_max_plus_beta_min_algorithm
- *  @param vector Vector to normalize
+ *  @param vector Vector to measure
+ *  @return Approximation of the vector length
  */
-void FastVectorNormalize(jo_vector_fixed * vector)
+jo_fixed FastVectorLength(const jo_vector_fixed * vector)
 {
     // Alpha is 0.9398086351723256
     // Beta is 0.38928148272372454
@@ -226,17 +225,15 @@ void FastVectorNormalize(jo_vector_fixed * vector)
     jo_fixed z = JO_ABS(vector->z);
 
     // Get min, mid, max
-    jo_fixed min = JO_MIN(x, JO_MIN(y, z));
-    jo_fixed max = JO_MAX(x, JO_MAX(y, z));
-    jo_fixed mid = min == x || max == x ? (min == y || max == y ? z : y) : x;
+    jo_fixed minYZ = JO_MIN(y, z);
+    jo_fixed maxYZ = JO_MAX(y, z);
+    jo_fixed min = JO_MIN(x, minYZ);
+    jo_fixed max = JO_MAX(x, maxYZ);
+    jo_fixed mid = (y < x) ? ((y < z) ? ((z < x) ? z : x) : y) : ((x < z) ? ((z < y) ? z : y) : x);
     
     // Aproximate vector length (alpha * max + beta * mid + gama * min)
-    jo_fixed length = JO_MAX(max, jo_fixed_mult(61591, max) + jo_fixed_mult(25512, mid) + jo_fixed_mult(19576, min));
-
-    // Normalize vector
-    vector->x = jo_fixed_div(vector->x, length);
-    vector->y = jo_fixed_div(vector->y, length);
-    vector->z = jo_fixed_div(vector->z, length);
+    jo_fixed approximation = jo_fixed_mult(61591, max) + jo_fixed_mult(25512, mid) + jo_fixed_mult(19576, min);
+    return JO_MAX(max, approximation);
 }
 
 /** @brief Simulate cloth
@@ -275,55 +272,55 @@ void DemoClothSim()
 
     count = (CLOTH_SIZE_W * (CLOTH_SIZE_H - 1)) + ((CLOTH_SIZE_W - 1) * CLOTH_SIZE_H);
 
-    for (int iteration = 0; iteration < SIM_ITERATIONS; iteration++)
+    for (int segment = 0; segment < count; segment++)
     {
-        for (int segment = 0; segment < count; segment++)
+        // Skip segments where both points are locked
+        if ((!Segments[segment].First->Locked || !Segments[segment].Second->Locked))
         {
-            // Skip segments where both points are locked
-            if ((!Segments[segment].First->Locked || !Segments[segment].Second->Locked))
-            {
-                jo_pos3D_fixed center;
-                int firstIndex = Segments[segment].First->PosIndex;
-                int secondIndex = Segments[segment].Second->PosIndex;
+            int firstIndex = Segments[segment].First->PosIndex;
+            int secondIndex = Segments[segment].Second->PosIndex;
 
+            jo_vector_fixed dir;
+            dir.x = MeshPoints[firstIndex][X] - MeshPoints[secondIndex][X];
+            dir.y = MeshPoints[firstIndex][Y] - MeshPoints[secondIndex][Y];
+            dir.z = MeshPoints[firstIndex][Z] - MeshPoints[secondIndex][Z];
+            jo_fixed length = FastVectorLength(&dir);
+
+            // Segment is overstretched
+            if (length > Segments[segment].Length)
+            {
+                // Normalize vector
+                dir.x = jo_fixed_div(dir.x, length);
+                dir.y = jo_fixed_div(dir.y, length);
+                dir.z = jo_fixed_div(dir.z, length);
+
+                // Segment center point
+                jo_pos3D_fixed center;
                 center.x = (MeshPoints[firstIndex][X] + MeshPoints[secondIndex][X]) >> 1;
                 center.y = (MeshPoints[firstIndex][Y] + MeshPoints[secondIndex][Y]) >> 1;
                 center.z = (MeshPoints[firstIndex][Z] + MeshPoints[secondIndex][Z]) >> 1;
 
-                jo_vector_fixed dir;
-                dir.x = MeshPoints[firstIndex][X] - MeshPoints[secondIndex][X];
-                dir.y = MeshPoints[firstIndex][Y] - MeshPoints[secondIndex][Y];
-                dir.z = MeshPoints[firstIndex][Z] - MeshPoints[secondIndex][Z];
-                jo_fixed manhattanLength = JO_ABS(dir.x) + JO_ABS(dir.y) + JO_ABS(dir.z);
+                jo_vector_fixed segmentDir;
+                segmentDir.x = jo_fixed_mult(dir.x, Segments[segment].Length) >> 1;
+                segmentDir.y = jo_fixed_mult(dir.y, Segments[segment].Length) >> 1;
+                segmentDir.z = jo_fixed_mult(dir.z, Segments[segment].Length) >> 1;
 
-                // Segment is overstretched
-                if (manhattanLength > Segments[segment].Length)
+                // Don't move point if locked
+                if (!Segments[segment].First->Locked)
                 {
-                    // Normalize segment vector
-                    FastVectorNormalize(&dir);
+                    MeshPoints[firstIndex][X] = center.x + segmentDir.x;
+                    MeshPoints[firstIndex][Y] = center.y + segmentDir.y;
+                    MeshPoints[firstIndex][Z] = center.z + segmentDir.z;
+                    MeshPoints[firstIndex][Z] = MAX(MeshPoints[firstIndex][Z], 0);
+                }
 
-                    jo_vector_fixed segmentDir;
-                    segmentDir.x = jo_fixed_mult(dir.x, Segments[segment].Length) >> 1;
-                    segmentDir.y = jo_fixed_mult(dir.y, Segments[segment].Length) >> 1;
-                    segmentDir.z = jo_fixed_mult(dir.z, Segments[segment].Length) >> 1;
-
-                    // Don't move point if locked
-                    if (!Segments[segment].First->Locked)
-                    {
-                        MeshPoints[firstIndex][X] = center.x + segmentDir.x;
-                        MeshPoints[firstIndex][Y] = center.y + segmentDir.y;
-                        MeshPoints[firstIndex][Z] = center.z + segmentDir.z;
-                        MeshPoints[firstIndex][Z] = MAX(MeshPoints[firstIndex][Z], 0);
-                    }
-
-                    // Don't move point if locked
-                    if (!Segments[segment].Second->Locked)
-                    {
-                        MeshPoints[secondIndex][X] = center.x - segmentDir.x;
-                        MeshPoints[secondIndex][Y] = center.y - segmentDir.y;
-                        MeshPoints[secondIndex][Z] = center.z - segmentDir.z;
-                        MeshPoints[secondIndex][Z] = MAX(MeshPoints[secondIndex][Z], 0);
-                    }
+                // Don't move point if locked
+                if (!Segments[segment].Second->Locked)
+                {
+                    MeshPoints[secondIndex][X] = center.x - segmentDir.x;
+                    MeshPoints[secondIndex][Y] = center.y - segmentDir.y;
+                    MeshPoints[secondIndex][Z] = center.z - segmentDir.z;
+                    MeshPoints[secondIndex][Z] = MAX(MeshPoints[secondIndex][Z], 0);
                 }
             }
         }
@@ -509,8 +506,8 @@ void DemoInitialize()
             MeshPoints[coord][Y] = 0;
             MeshPoints[coord][Z] = z;
             Points[coord].PosIndex = coord;
-            Points[coord].PrevPos.x = x;
-            Points[coord].PrevPos.y = 0;
+            Points[coord].PrevPos.x = x + (jo_random(1000) - 500);
+            Points[coord].PrevPos.y = (jo_random(1000) - 500);
             Points[coord].PrevPos.z = z;
 
             Points[coord].Locked = pointy == CLOTH_SIZE_H - 1 && canLock;

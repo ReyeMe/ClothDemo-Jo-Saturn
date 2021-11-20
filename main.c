@@ -249,48 +249,54 @@ void DemoLogic()
     {
         for (int segment = 0; segment < count; segment++)
         {
-            jo_pos3D_fixed center;
-            int firstIndex = Segments[segment].First->PosIndex;
-            int secondIndex = Segments[segment].Second->PosIndex;
-
-            center.x = jo_fixed_div(MeshPoints[firstIndex][X] + MeshPoints[secondIndex][X], JO_FIXED_2);
-            center.y = jo_fixed_div(MeshPoints[firstIndex][Y] + MeshPoints[secondIndex][Y], JO_FIXED_2);
-            center.z = jo_fixed_div(MeshPoints[firstIndex][Z] + MeshPoints[secondIndex][Z], JO_FIXED_2);
-
-            jo_vector_fixed dir;
-            dir.x = MeshPoints[firstIndex][X] - MeshPoints[secondIndex][X];
-            dir.y = MeshPoints[firstIndex][Y] - MeshPoints[secondIndex][Y];
-            dir.z = MeshPoints[firstIndex][Z] - MeshPoints[secondIndex][Z];
-            jo_fixed length = jo_fixed_sqrt(jo_fixed_mult(dir.x, dir.x) + jo_fixed_mult(dir.y, dir.y) + jo_fixed_mult(dir.z, dir.z));
-
-            if (length > Segments[segment].Length &&
-                (!Segments[segment].First->Locked || !Segments[segment].Second->Locked))
+            // Skip segments where both points are locked
+            if ((!Segments[segment].First->Locked || !Segments[segment].Second->Locked))
             {
-                dir.x = jo_fixed_div(dir.x, length);
-                dir.y = jo_fixed_div(dir.y, length);
-                dir.z = jo_fixed_div(dir.z, length);
+                jo_pos3D_fixed center;
+                int firstIndex = Segments[segment].First->PosIndex;
+                int secondIndex = Segments[segment].Second->PosIndex;
 
-                jo_vector_fixed segmentDir;
-                segmentDir.x = jo_fixed_div(jo_fixed_mult(dir.x, Segments[segment].Length), JO_FIXED_2);
-                segmentDir.y = jo_fixed_div(jo_fixed_mult(dir.y, Segments[segment].Length), JO_FIXED_2);
-                segmentDir.z = jo_fixed_div(jo_fixed_mult(dir.z, Segments[segment].Length), JO_FIXED_2);
+                center.x = (MeshPoints[firstIndex][X] + MeshPoints[secondIndex][X]) >> 1;
+                center.y = (MeshPoints[firstIndex][Y] + MeshPoints[secondIndex][Y]) >> 1;
+                center.z = (MeshPoints[firstIndex][Z] + MeshPoints[secondIndex][Z]) >> 1;
 
-                // Don't move point if locked
-                if (!Segments[segment].First->Locked)
+                jo_vector_fixed dir;
+                dir.x = MeshPoints[firstIndex][X] - MeshPoints[secondIndex][X];
+                dir.y = MeshPoints[firstIndex][Y] - MeshPoints[secondIndex][Y];
+                dir.z = MeshPoints[firstIndex][Z] - MeshPoints[secondIndex][Z];
+                jo_fixed manhattanLength = JO_ABS(dir.x) + JO_ABS(dir.y) + JO_ABS(dir.z);
+
+                // Segment is overstretched
+                if (manhattanLength > Segments[segment].Length)
                 {
-                    MeshPoints[firstIndex][X] = center.x + segmentDir.x;
-                    MeshPoints[firstIndex][Y] = center.y + segmentDir.y;
-                    MeshPoints[firstIndex][Z] = center.z + segmentDir.z;
-                    MeshPoints[firstIndex][Z] = MAX(MeshPoints[firstIndex][Z], 0);
-                }
+                    // Calculate real length once we know that segment is overstretched
+                    jo_fixed length = jo_fixed_sqrt(jo_fixed_mult(dir.x, dir.x) + jo_fixed_mult(dir.y, dir.y) + jo_fixed_mult(dir.z, dir.z));
+                    dir.x = jo_fixed_div(dir.x, length);
+                    dir.y = jo_fixed_div(dir.y, length);
+                    dir.z = jo_fixed_div(dir.z, length);
 
-                // Don't move point if locked
-                if (!Segments[segment].Second->Locked)
-                {
-                    MeshPoints[secondIndex][X] = center.x - segmentDir.x;
-                    MeshPoints[secondIndex][Y] = center.y - segmentDir.y;
-                    MeshPoints[secondIndex][Z] = center.z - segmentDir.z;
-                    MeshPoints[secondIndex][Z] = MAX(MeshPoints[secondIndex][Z], 0);
+                    jo_vector_fixed segmentDir;
+                    segmentDir.x = jo_fixed_mult(dir.x, Segments[segment].Length) >> 1;
+                    segmentDir.y = jo_fixed_mult(dir.y, Segments[segment].Length) >> 1;
+                    segmentDir.z = jo_fixed_mult(dir.z, Segments[segment].Length) >> 1;
+
+                    // Don't move point if locked
+                    if (!Segments[segment].First->Locked)
+                    {
+                        MeshPoints[firstIndex][X] = center.x + segmentDir.x;
+                        MeshPoints[firstIndex][Y] = center.y + segmentDir.y;
+                        MeshPoints[firstIndex][Z] = center.z + segmentDir.z;
+                        MeshPoints[firstIndex][Z] = MAX(MeshPoints[firstIndex][Z], 0);
+                    }
+
+                    // Don't move point if locked
+                    if (!Segments[segment].Second->Locked)
+                    {
+                        MeshPoints[secondIndex][X] = center.x - segmentDir.x;
+                        MeshPoints[secondIndex][Y] = center.y - segmentDir.y;
+                        MeshPoints[secondIndex][Z] = center.z - segmentDir.z;
+                        MeshPoints[secondIndex][Z] = MAX(MeshPoints[secondIndex][Z], 0);
+                    }
                 }
             }
         }

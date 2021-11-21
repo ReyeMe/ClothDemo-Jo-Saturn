@@ -4,9 +4,9 @@
 #include "mathex.h"
 
 /* Simulation stuff */
-#define CLOTH_SIZE_W (21)
-#define CLOTH_SIZE_H (11)
-#define CLOTH_SPACING JO_FIXED_4
+#define CLOTH_SIZE_W (25)
+#define CLOTH_SIZE_H (16)
+#define CLOTH_SPACING JO_FIXED_2
 
 /** @brief Phys point
  */
@@ -38,9 +38,16 @@ static jo_vector_fixed Gravity;
 /* Cloth mesh */
 static jo_3d_mesh Cloth;
 
+/* The box */
+#define BOX_SIZE (8)
+static jo_pos3D_fixed BoxPosition = { -(BOX_SIZE << 17), 0, BOX_SIZE << 16 };
+static jo_vertice BoxVertices[] = JO_3D_CUBE_VERTICES(BOX_SIZE);
+static jo_3d_quad BoxQuads[6];
+static int BoxTextureIndex = 0;
+
 /* Camera stuff */
 /* Speed of moving */
-#define MOVE_SPEED JO_FIXED_1
+#define MOVE_SPEED JO_FIXED_1_DIV_2
 
 /* Speed of turning */
 #define TURN_SPEED (1319)
@@ -53,6 +60,9 @@ static jo_palette Rgb0Palette;
 
 /* Is player controlling cloth or camera */
 static int ControlMode = 0;
+
+/* Is cloth going to drag on cube */
+static bool CubeIsSticky = 0;
 
 /* Current cloth texture */
 static int ClothTexture = 0;
@@ -102,6 +112,205 @@ void DoRoll(jo_fixed value)
     Camera.AxisX = ExRotateVectorAroundAxis(&Camera.AxisX, value, &cross);
     Camera.AxisY = ExVectorCross(&cross, &Camera.AxisX);
     ExVectorNormal(&Camera.AxisY);
+}
+
+/** @brief Fast length of 3D vector (Thx GValiente for solution).
+ *  For more info about how it works see: https://math.stackexchange.com/questions/1282435/alpha-max-plus-beta-min-algorithm-for-three-numbers
+ *  And also: https://en.wikipedia.org/wiki/Alpha_max_plus_beta_min_algorithm
+ *  @param vector Vector to measure
+ *  @return Approximation of the vector length
+ */
+jo_fixed FastVectorLength(const jo_vector_fixed * vector)
+{
+    // Alpha is 0.9398086351723256
+    // Beta is 0.38928148272372454
+    // Gama is 0.2987061876143797
+
+    // Get absolute values of the vector components
+    jo_fixed x = JO_ABS(vector->x);
+    jo_fixed y = JO_ABS(vector->y);
+    jo_fixed z = JO_ABS(vector->z);
+
+    // Get min, mid, max
+    jo_fixed minYZ = JO_MIN(y, z);
+    jo_fixed maxYZ = JO_MAX(y, z);
+    jo_fixed min = JO_MIN(x, minYZ);
+    jo_fixed max = JO_MAX(x, maxYZ);
+    jo_fixed mid = (y < x) ? ((y < z) ? ((z < x) ? z : x) : y) : ((x < z) ? ((z < y) ? z : y) : x);
+    
+    // Aproximate vector length (alpha * max + beta * mid + gama * min)
+    jo_fixed approximation = jo_fixed_mult(61591, max) + jo_fixed_mult(25512, mid) + jo_fixed_mult(19576, min);
+    return JO_MAX(max, approximation);
+}
+
+/** @brief Calculates collision between moving point and static AABB
+ *  @param pointPrev Previous position of the moving point
+ *  @param pointCur Current position of the moving point
+ *  @param aabbCenter Center point of collider box
+ *  @param aabbRadius Radius size of the collider box
+ *  @param repulsionVector Resulting repulsion vector from collision
+ *  @return True if there is collision 
+ */
+bool SweptCollisionPointToAABB(
+    const jo_pos3D_fixed * pointPrev,
+    const jo_pos3D_fixed * pointCur,
+    const jo_pos3D_fixed * aabbCenter,
+    const jo_fixed aabbRadius,
+    jo_vector_fixed * repulsionVector)
+{
+    jo_fixed entryTime;
+    jo_fixed entryX;
+    jo_fixed entryY;
+    jo_fixed entryZ;
+    bool collisionX = false;
+    bool collisionY = false;
+    bool collisionZ = false;
+
+    jo_vector_fixed movementVector = { { pointCur->x - pointPrev->x, pointCur->y - pointPrev->y, pointCur->z - pointPrev->z } };
+
+    // Default to maximal entry time (1.0f)
+    repulsionVector->x = JO_FIXED_1;
+    repulsionVector->y = JO_FIXED_1;
+    repulsionVector->z = JO_FIXED_1;
+
+    // Box sides
+    jo_fixed right = aabbCenter->x + aabbRadius;
+    jo_fixed left = aabbCenter->x - aabbRadius;
+
+    jo_fixed forward = aabbCenter->y + aabbRadius;
+    jo_fixed backward = aabbCenter->y - aabbRadius;
+
+    jo_fixed top = aabbCenter->z + aabbRadius;
+    jo_fixed bottom = aabbCenter->z - aabbRadius;
+
+    // Check for collision on X axis line
+    if (movementVector.x != 0)
+    {
+        if ((movementVector.x > 0 && pointPrev->x <= left && pointCur->x > left) ||
+             (movementVector.x < 0 && pointPrev->x >= right && pointCur->x < right))
+        {
+            // We got collision
+            if (movementVector.x > 0)
+            {
+                entryTime = left - pointPrev->x;
+            }
+            else
+            {
+                entryTime = right - pointPrev->x;
+            }
+
+            entryTime = jo_fixed_div(entryTime, movementVector.x);
+            entryY = jo_fixed_mult(movementVector.y, entryTime);
+            entryZ = jo_fixed_mult(movementVector.z, entryTime);
+
+            // Check for Y and Z collision
+            if (pointPrev->y + entryY <= forward && 
+                pointPrev->y + entryY >= backward &&
+                pointPrev->z + entryZ <= top && 
+                pointPrev->z + entryZ >= bottom)
+            {
+                repulsionVector->x = entryTime;
+                collisionX = true;
+            }
+        }
+    }
+
+    // Check for collision on Y axis line
+    if (movementVector.y != 0)
+    {
+        if ((movementVector.y > 0 && pointPrev->y <= backward && pointCur->y > backward) ||
+            (movementVector.y < 0 && pointPrev->y >= forward && pointCur->y < forward))
+        {
+            // We got collision
+            if (movementVector.y > 0)
+            {
+                entryTime = backward - pointPrev->y;
+            }
+            else
+            {
+                entryTime = forward - pointPrev->y;
+            }
+
+            entryTime = jo_fixed_div(entryTime, movementVector.y);
+            entryX = jo_fixed_mult(movementVector.x, entryTime);
+            entryZ = jo_fixed_mult(movementVector.z, entryTime);
+
+            // Check for horizontal collision
+            if (pointPrev->x + entryX <= right &&
+                pointPrev->x + entryX >= left &&
+                pointPrev->z + entryZ <= top && 
+                pointPrev->z + entryZ >= bottom)
+            {
+                repulsionVector->y = entryTime;
+                collisionY = true;
+            }
+        }
+    }
+        
+    // Check for collision on Z axis line
+    if (movementVector.z != 0)
+    {
+        if ((movementVector.z > 0 && pointPrev->z <= bottom && pointCur->z > bottom) ||
+            (movementVector.z < 0 && pointPrev->z >= top && pointCur->z < top))
+        {
+            // We got collision
+            if (movementVector.z > 0)
+            {
+                entryTime = bottom - pointPrev->z;
+            }
+            else
+            {
+                entryTime = top - pointPrev->z;
+            }
+
+            entryTime = jo_fixed_div(entryTime, movementVector.z);
+            entryX = jo_fixed_mult(movementVector.x, entryTime);
+            entryY = jo_fixed_mult(movementVector.y, entryTime);
+
+            // Check for horizontal collision
+            if (pointPrev->x + entryX <= right &&
+                pointPrev->x + entryX >= left &&
+                pointPrev->y + entryY <= forward && 
+                pointPrev->y + entryY >= backward)
+            {
+                repulsionVector->z = entryTime;
+                collisionZ = true;
+            }
+        }
+    }
+
+    return collisionX || collisionY || collisionZ;
+}
+
+/** @brief Do collision with PhysPoint
+ *  @param index PhysPoint index
+ *  @return True if collides with box
+ */
+bool DoCollideWithClothPoint(int index)
+{
+    bool collision = false;
+    int meshPoint = Points[index].PosIndex;
+
+    jo_pos3D_fixed current;
+    current.x = MeshPoints[meshPoint][X];
+    current.y = MeshPoints[meshPoint][Y];
+    current.z = MeshPoints[meshPoint][Z];
+    current.z = MAX(current.z, 0);
+
+    jo_vector_fixed result;
+
+    if (SweptCollisionPointToAABB(&Points[index].PrevPos, &current, &BoxPosition, BOX_SIZE << 16, &result))
+    {
+        current.x = Points[index].PrevPos.x + jo_fixed_mult(current.x - Points[index].PrevPos.x, result.x);
+        current.y = Points[index].PrevPos.y + jo_fixed_mult(current.y - Points[index].PrevPos.y, result.y);
+        current.z = Points[index].PrevPos.z + jo_fixed_mult(current.z - Points[index].PrevPos.z, result.z);
+        collision = true;
+    }
+
+    MeshPoints[meshPoint][X] = current.x;
+    MeshPoints[meshPoint][Y] = current.y;
+    MeshPoints[meshPoint][Z] = current.z;
+    return collision;
 }
 
 /** @brief Use controller to move camera 
@@ -194,10 +403,28 @@ void MoveCloth()
 
                 if (Points[coord].Locked)
                 {
-                    MeshPoints[Points[coord].PosIndex][X] += jo_int2fixed(movex);
-                    MeshPoints[Points[coord].PosIndex][Y] += jo_int2fixed(movey);
-                    MeshPoints[Points[coord].PosIndex][Z] += jo_int2fixed(movez);
-                    MeshPoints[Points[coord].PosIndex][Z] = MAX(MeshPoints[Points[coord].PosIndex][Z], 0);
+                    MeshPoints[Points[coord].PosIndex][X] += jo_int2fixed(movex) >> 1;
+                    MeshPoints[Points[coord].PosIndex][Y] += jo_int2fixed(movey) >> 1;
+                    MeshPoints[Points[coord].PosIndex][Z] += jo_int2fixed(movez) >> 1;
+
+                    jo_pos3D_fixed current;
+                    current.x = MeshPoints[Points[coord].PosIndex][X];
+                    current.y = MeshPoints[Points[coord].PosIndex][Y];
+                    current.z = MeshPoints[Points[coord].PosIndex][Z];
+                    current.z = MAX(current.z, 0);
+
+                    jo_vector_fixed result;
+
+                    if (SweptCollisionPointToAABB(&Points[coord].PrevPos, &current, &BoxPosition, BOX_SIZE << 16, &result))
+                    {
+                        current.x = Points[coord].PrevPos.x + jo_fixed_mult(current.x - Points[coord].PrevPos.x, result.x);
+                        current.y = Points[coord].PrevPos.y + jo_fixed_mult(current.y - Points[coord].PrevPos.y, result.y);
+                        current.z = Points[coord].PrevPos.z + jo_fixed_mult(current.z - Points[coord].PrevPos.z, result.z);
+                    }
+
+                    MeshPoints[Points[coord].PosIndex][X] = current.x;
+                    MeshPoints[Points[coord].PosIndex][Y] = current.y;
+                    MeshPoints[Points[coord].PosIndex][Z] = current.z;
                     Points[coord].PrevPos.x = MeshPoints[Points[coord].PosIndex][X];
                     Points[coord].PrevPos.y = MeshPoints[Points[coord].PosIndex][Y];
                     Points[coord].PrevPos.z = MeshPoints[Points[coord].PosIndex][Z];
@@ -205,35 +432,6 @@ void MoveCloth()
             }
         }
     }
-}
-
-/** @brief Fast length of 3D vector (Thx GValiente for solution).
- *  For more info about how it works see: https://math.stackexchange.com/questions/1282435/alpha-max-plus-beta-min-algorithm-for-three-numbers
- *  And also: https://en.wikipedia.org/wiki/Alpha_max_plus_beta_min_algorithm
- *  @param vector Vector to measure
- *  @return Approximation of the vector length
- */
-jo_fixed FastVectorLength(const jo_vector_fixed * vector)
-{
-    // Alpha is 0.9398086351723256
-    // Beta is 0.38928148272372454
-    // Gama is 0.2987061876143797
-
-    // Get absolute values of the vector components
-    jo_fixed x = JO_ABS(vector->x);
-    jo_fixed y = JO_ABS(vector->y);
-    jo_fixed z = JO_ABS(vector->z);
-
-    // Get min, mid, max
-    jo_fixed minYZ = JO_MIN(y, z);
-    jo_fixed maxYZ = JO_MAX(y, z);
-    jo_fixed min = JO_MIN(x, minYZ);
-    jo_fixed max = JO_MAX(x, maxYZ);
-    jo_fixed mid = (y < x) ? ((y < z) ? ((z < x) ? z : x) : y) : ((x < z) ? ((z < y) ? z : y) : x);
-    
-    // Aproximate vector length (alpha * max + beta * mid + gama * min)
-    jo_fixed approximation = jo_fixed_mult(61591, max) + jo_fixed_mult(25512, mid) + jo_fixed_mult(19576, min);
-    return JO_MAX(max, approximation);
 }
 
 /** @brief Simulate cloth
@@ -248,6 +446,7 @@ void DemoClothSim()
         if (!Points[point].Locked)
         {
             int posIndex = Points[point].PosIndex;
+            bool collidesWithBox = DoCollideWithClothPoint(point);
             
             jo_pos3D_fixed prev = { MeshPoints[posIndex][X], MeshPoints[posIndex][Y], MeshPoints[posIndex][Z] };
             MeshPoints[posIndex][X] += (MeshPoints[posIndex][X] - Points[point].PrevPos.x) + Gravity.x;
@@ -256,14 +455,14 @@ void DemoClothSim()
 
             MeshPoints[posIndex][Z] = MAX(MeshPoints[posIndex][Z], 0);
 
-            // Make cloth drag on ground by making the movement force from last frame half
-            if (MeshPoints[posIndex][Z] == 0)
+            // Make cloth drag on stuff by making the movement force from last frame half
+            if ((collidesWithBox && CubeIsSticky) || MeshPoints[posIndex][Z] == 0)
             {
-                prev.x = (MeshPoints[posIndex][X] + prev.x) >> 1;
-                prev.y = (MeshPoints[posIndex][Y] + prev.y) >> 1;
-                prev.z = (MeshPoints[posIndex][Z] + prev.z) >> 1;
+                MeshPoints[posIndex][X] = (MeshPoints[posIndex][X] + prev.x) >> 1;
+                MeshPoints[posIndex][Y] = (MeshPoints[posIndex][Y] + prev.y) >> 1;
+                MeshPoints[posIndex][Z] = (MeshPoints[posIndex][Z] + prev.z) >> 1;
             }
-
+            
             Points[point].PrevPos.x = prev.x;
             Points[point].PrevPos.y = prev.y;
             Points[point].PrevPos.z = prev.z;
@@ -358,6 +557,12 @@ void DemoLogic()
             jo_3d_set_mesh_texture(&Cloth, ClothTexture);
         }
 
+        // Cycle cloth texture
+        if (jo_is_pad1_key_down(JO_KEY_Y))
+        {
+            CubeIsSticky = !CubeIsSticky;
+        }
+
         // Process input
         switch (ControlMode)
         {
@@ -386,29 +591,30 @@ void DemoDraw()
     jo_printf_with_color(1,1, JO_COLOR_INDEX_White, "Mode: %s          ", ControlMode == 0 ? "Moving cloth" : "Camera");
     jo_printf(1,3, "Controls:");
 
+    // Cycle cloth textures
+    jo_printf(1,4, "Cycle cloth texture: X (current: %d)", ClothTexture);
+    jo_printf(1,5, "Cloth drags on cube: Y (current: %s)", CubeIsSticky ? "True " : "False");
+
     if (ControlMode == 0)
     {
-        jo_printf(1,4, "Switch to camera mode: C    ");
-        jo_printf(1,5, "Move on plane: D-Pad        ");
-        jo_printf(1,6, "Move up/down: R/L           ");
-        jo_printf(1,7, "                            ");
-        jo_printf(1,8, "                            ");
+        jo_printf(1,6, "Switch to camera mode: C    ");
+        jo_printf(1,7, "Move on plane: D-Pad        ");
+        jo_printf(1,8, "Move up/down: R/L           ");
         jo_printf(1,9, "                            ");
+        jo_printf(1,10, "                            ");
+        jo_printf(1,11, "                            ");
 
     }
     else
     {
-        jo_printf(1,4, "Switch to cloth mode: C     ");
-        jo_printf(1,5, "Yaw: D-Pad left/right       ");
-        jo_printf(1,6, "Pitch: D-Pad up/down        ");
-        jo_printf(1,7, "Roll: R/L");
-        jo_printf(1,8, "Move forward: A");
-        jo_printf(1,9, "Move backward: B");
+        jo_printf(1,6, "Switch to cloth mode: C     ");
+        jo_printf(1,7, "Yaw: D-Pad left/right       ");
+        jo_printf(1,8, "Pitch: D-Pad up/down        ");
+        jo_printf(1,9, "Roll: R/L");
+        jo_printf(1,10, "Move forward: A");
+        jo_printf(1,11, "Move backward: B");
     }
 
-    // Cycle cloth textures
-    jo_printf(1,9, "Cycle cloth texture: X (current: %d)", ClothTexture);
-    
     // Credits
     jo_printf_with_color(1,28, JO_COLOR_INDEX_Red, "Demo by SuperReye (www.reye.me)");
 
@@ -422,6 +628,14 @@ void DemoDraw()
 
         // Draw cloth mesh
         jo_3d_mesh_draw(&Cloth);
+
+        // Draw box
+        jo_3d_push_matrix();
+        {
+            jo_3d_translate_matrix_fixed(BoxPosition.x, BoxPosition.y, BoxPosition.z);
+            jo_3d_draw_array(BoxQuads, 6);
+        }
+        jo_3d_pop_matrix();
 
         // Draw ground
         jo_background_3d_plane_a_draw(true);
@@ -478,6 +692,9 @@ void LoadAssets()
     jo_sprite_add_tga(JO_ROOT_DIR, "CLOTH2.TGA", JO_COLOR_Transparent);
     jo_sprite_add_tga(JO_ROOT_DIR, "CLOTH3.TGA", JO_COLOR_Transparent);
 
+    // Load box texture
+    BoxTextureIndex = jo_sprite_add_tga(JO_ROOT_DIR, "BOX.TGA", JO_COLOR_Transparent);
+
     jo_core_tv_on();
 }
 
@@ -489,6 +706,16 @@ void DemoInitialize()
     Gravity.y = 0;
     Gravity.z = -1700;
 
+    // Generate box
+    jo_3d_create_cube(BoxQuads, BoxVertices);
+
+    for (int quad = 0; quad < 6; ++quad)
+    {
+        jo_3d_set_texture(&BoxQuads[quad], BoxTextureIndex);
+        BoxQuads[quad].data.attbl[0].sort = (SORT_MAX) | (((sprNoflip) >> 16) & 0x1c) | (No_Option);
+    }
+
+    // Generate cloth mesh
     int segment = 0;
 
     for(int pointx = 0; pointx < CLOTH_SIZE_W; pointx++)

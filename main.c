@@ -199,6 +199,7 @@ bool SweptCollisionPointToAABB(
                 entryTime = right - pointPrev->x;
             }
 
+            // Calculate entry time (distance from previous position to the box along movement direction)
             entryTime = jo_fixed_div(entryTime, movementVector.x);
             entryY = jo_fixed_mult(movementVector.y, entryTime);
             entryZ = jo_fixed_mult(movementVector.z, entryTime);
@@ -231,11 +232,12 @@ bool SweptCollisionPointToAABB(
                 entryTime = forward - pointPrev->y;
             }
 
+            // Calculate entry time (distance from previous position to the box along movement direction)
             entryTime = jo_fixed_div(entryTime, movementVector.y);
             entryX = jo_fixed_mult(movementVector.x, entryTime);
             entryZ = jo_fixed_mult(movementVector.z, entryTime);
 
-            // Check for horizontal collision
+            // Check for X and Z collision
             if (pointPrev->x + entryX <= right &&
                 pointPrev->x + entryX >= left &&
                 pointPrev->z + entryZ <= top && 
@@ -263,11 +265,12 @@ bool SweptCollisionPointToAABB(
                 entryTime = top - pointPrev->z;
             }
 
+            // Calculate entry time (distance from previous position to the box along movement direction)
             entryTime = jo_fixed_div(entryTime, movementVector.z);
             entryX = jo_fixed_mult(movementVector.x, entryTime);
             entryY = jo_fixed_mult(movementVector.y, entryTime);
 
-            // Check for horizontal collision
+            // Check for X and Y collision
             if (pointPrev->x + entryX <= right &&
                 pointPrev->x + entryX >= left &&
                 pointPrev->y + entryY <= forward && 
@@ -403,14 +406,10 @@ void MoveCloth()
 
                 if (Points[coord].Locked)
                 {
-                    MeshPoints[Points[coord].PosIndex][X] += jo_int2fixed(movex) >> 1;
-                    MeshPoints[Points[coord].PosIndex][Y] += jo_int2fixed(movey) >> 1;
-                    MeshPoints[Points[coord].PosIndex][Z] += jo_int2fixed(movez) >> 1;
-
                     jo_pos3D_fixed current;
-                    current.x = MeshPoints[Points[coord].PosIndex][X];
-                    current.y = MeshPoints[Points[coord].PosIndex][Y];
-                    current.z = MeshPoints[Points[coord].PosIndex][Z];
+                    current.x = MeshPoints[Points[coord].PosIndex][X] + (jo_int2fixed(movex) >> 1);
+                    current.y = MeshPoints[Points[coord].PosIndex][Y] + (jo_int2fixed(movey) >> 1);
+                    current.z = MeshPoints[Points[coord].PosIndex][Z] + (jo_int2fixed(movez) >> 1);
                     current.z = MAX(current.z, 0);
 
                     jo_vector_fixed result;
@@ -446,8 +445,11 @@ void DemoClothSim()
         if (!Points[point].Locked)
         {
             int posIndex = Points[point].PosIndex;
+
+            // Do box collision
             bool collidesWithBox = DoCollideWithClothPoint(point);
             
+            // Do gravity
             jo_pos3D_fixed prev = { MeshPoints[posIndex][X], MeshPoints[posIndex][Y], MeshPoints[posIndex][Z] };
             MeshPoints[posIndex][X] += (MeshPoints[posIndex][X] - Points[point].PrevPos.x) + Gravity.x;
             MeshPoints[posIndex][Y] += (MeshPoints[posIndex][Y] - Points[point].PrevPos.y) + Gravity.y;

@@ -1,6 +1,7 @@
 # Prerequisites
 *.d
 *.blend1
+*.raw
 
 # Object files
 *.o

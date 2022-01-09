@@ -70,6 +70,109 @@ static int ClothTexture = 0;
 /* maximum number of cloth textures */
 #define MAX_CLOTH_TEXTURES (4)
 
+/** @brief reset cloth
+ *  @param drop If true, cloth gets dropped
+ */
+void DropOrPickupCloth(bool drop)
+{
+    for(int pointx = 0; pointx < CLOTH_SIZE_W; pointx++)
+    {
+        bool canLock = !drop && pointx % 4 == 0;
+
+        for(int pointy = 0; pointy < CLOTH_SIZE_H; pointy++)
+        {
+            int coord = pointx + (CLOTH_SIZE_W * pointy);
+            Points[coord].Locked = pointy == CLOTH_SIZE_H - 1 && canLock;
+        }
+    }
+}
+
+/** @brief reset cloth
+ */
+void ResetCloth()
+{
+    // Set segments and points
+    int segment = 0;
+
+    for(int pointx = 0; pointx < CLOTH_SIZE_W; pointx++)
+    {
+        bool canLock = pointx % 4 == 0;
+
+        for(int pointy = 0; pointy < CLOTH_SIZE_H; pointy++)
+        {
+            // Generate point
+            int x = pointx * CLOTH_SPACING;
+            int z = (pointy * CLOTH_SPACING);
+            int coord = pointx + (CLOTH_SIZE_W * pointy);
+
+            MeshPoints[coord][X] = x;
+            MeshPoints[coord][Y] = 0;
+            MeshPoints[coord][Z] = z;
+            Points[coord].PosIndex = coord;
+            Points[coord].PrevPos.x = x + (jo_random(1000) - 500);
+            Points[coord].PrevPos.y = (jo_random(1000) - 500);
+            Points[coord].PrevPos.z = z;
+
+            Points[coord].Locked = pointy == CLOTH_SIZE_H - 1 && canLock;
+
+            // Create segment
+            if (pointx < CLOTH_SIZE_W - 1)
+            {
+                Segments[segment].First = &(Points[coord]);
+                Segments[segment].Second = &(Points[coord + 1]);
+                Segments[segment].Length = CLOTH_SPACING;
+                segment++;
+            }
+
+            if (pointy < CLOTH_SIZE_H - 1)
+            {
+                Segments[segment].First = &(Points[coord]);
+                Segments[segment].Second = &(Points[pointx + (CLOTH_SIZE_W * (pointy + 1))]);
+                Segments[segment].Length = CLOTH_SPACING;
+                segment++;
+            }
+        }
+    }
+
+    // Set mesh attributes
+    for (Uint32 attribute = 0; attribute < Cloth.data.nbPolygon; attribute++)
+    {
+        ATTR attr = ATTRIBUTE(
+            Dual_Plane,
+            SORT_CEN,
+            ClothTexture,
+            JO_COLOR_RGB(255, 255, 255),
+            CL32KRGB | No_Gouraud,
+            CL32KRGB | MESHoff,
+            sprNoflip,
+            No_Option);
+
+        Cloth.data.attbl[attribute] = attr;
+    }
+    
+    // Set mesh vertices
+    for (int polyx = 0; polyx < CLOTH_SIZE_W - 1; polyx++)
+    {
+        for (int polyy = 0; polyy < CLOTH_SIZE_H - 1; polyy++)
+        {
+            int coord = polyx + ((CLOTH_SIZE_W - 1) * polyy);
+            int coord1 = polyx + (CLOTH_SIZE_W * polyy);
+            int coord2 = polyx + (CLOTH_SIZE_W * polyy) + 1;
+            int coord3 = polyx + (CLOTH_SIZE_W * (polyy + 1)) + 1;
+            int coord4 = polyx + (CLOTH_SIZE_W * (polyy + 1));
+
+            Cloth.data.pltbl[coord].Vertices[0] = coord1;
+            Cloth.data.pltbl[coord].Vertices[1] = coord2;
+            Cloth.data.pltbl[coord].Vertices[2] = coord3;
+            Cloth.data.pltbl[coord].Vertices[3] = coord4;
+
+            Cloth.data.pltbl[coord].norm[X] = 0;
+            Cloth.data.pltbl[coord].norm[Y] = 0;
+            Cloth.data.pltbl[coord].norm[Z] = JO_FIXED_1;
+        }
+    }
+}
+
 /** @brief Move camera forward and backward
  *  @param value Speed of movement
  */
@@ -532,6 +635,8 @@ void DemoClothSim()
  */
 void DemoLogic()
 {
+    static bool dropped = false;
+
     // Handle gamepad
     if (jo_is_pad1_available())
     {
@@ -565,6 +670,19 @@ void DemoLogic()
             CubeIsSticky = !CubeIsSticky;
         }
 
+        // Reset cloth location and force vectors
+        if (jo_is_pad1_key_down(JO_KEY_Z))
+        {
+            dropped = !dropped;
+            DropOrPickupCloth(dropped);
+        }
+
+        // Reset cloth location and force vectors
+        if (jo_is_pad1_key_down(JO_KEY_START))
+        {
+            ResetCloth();
+        }
+
         // Process input
         switch (ControlMode)
         {
@@ -596,25 +714,27 @@ void DemoDraw()
     // Cycle cloth textures
     jo_printf(1,4, "Cycle cloth texture: X (current: %d)", ClothTexture);
     jo_printf(1,5, "Cloth drags on cube: Y (current: %s)", CubeIsSticky ? "True " : "False");
+    jo_printf(1,6, "Drop or pickup cloth: Z");
+    jo_printf(1,7, "Reset cloth: Start");
 
     if (ControlMode == 0)
     {
-        jo_printf(1,6, "Switch to camera mode: C    ");
-        jo_printf(1,7, "Move on plane: D-Pad        ");
-        jo_printf(1,8, "Move up/down: R/L           ");
-        jo_printf(1,9, "                            ");
-        jo_printf(1,10, "                            ");
+        jo_printf(1,8, "Switch to camera mode: C    ");
+        jo_printf(1,9, "Move on plane: D-Pad        ");
+        jo_printf(1,10, "Move up/down: R/L           ");
         jo_printf(1,11, "                            ");
+        jo_printf(1,12, "                            ");
+        jo_printf(1,13, "                            ");
 
     }
     else
     {
-        jo_printf(1,6, "Switch to cloth mode: C     ");
-        jo_printf(1,7, "Yaw: D-Pad left/right       ");
-        jo_printf(1,8, "Pitch: D-Pad up/down        ");
-        jo_printf(1,9, "Roll: R/L");
-        jo_printf(1,10, "Move forward: A");
-        jo_printf(1,11, "Move backward: B");
+        jo_printf(1,8, "Switch to cloth mode: C     ");
+        jo_printf(1,9, "Yaw: D-Pad left/right       ");
+        jo_printf(1,10, "Pitch: D-Pad up/down        ");
+        jo_printf(1,11, "Roll: R/L");
+        jo_printf(1,12, "Move forward: A");
+        jo_printf(1,13, "Move backward: B");
     }
 
     // Credits
@@ -717,49 +837,6 @@ void DemoInitialize()
         BoxQuads[quad].data.attbl[0].sort = (SORT_MAX) | (((sprNoflip) >> 16) & 0x1c) | (No_Option);
     }
 
-    // Generate cloth mesh
-    int segment = 0;
-
-    for(int pointx = 0; pointx < CLOTH_SIZE_W; pointx++)
-    {
-        bool canLock = pointx % 4 == 0;
-
-        for(int pointy = 0; pointy < CLOTH_SIZE_H; pointy++)
-        {
-            // Generate point
-            int x = pointx * CLOTH_SPACING;
-            int z = (pointy * CLOTH_SPACING);
-            int coord = pointx + (CLOTH_SIZE_W * pointy);
-
-            MeshPoints[coord][X] = x;
-            MeshPoints[coord][Y] = 0;
-            MeshPoints[coord][Z] = z;
-            Points[coord].PosIndex = coord;
-            Points[coord].PrevPos.x = x + (jo_random(1000) - 500);
-            Points[coord].PrevPos.y = (jo_random(1000) - 500);
-            Points[coord].PrevPos.z = z;
-
-            Points[coord].Locked = pointy == CLOTH_SIZE_H - 1 && canLock;
-
-            // Create segment
-            if (pointx < CLOTH_SIZE_W - 1)
-            {
-                Segments[segment].First = &(Points[coord]);
-                Segments[segment].Second = &(Points[coord + 1]);
-                Segments[segment].Length = CLOTH_SPACING;
-                segment++;
-            }
-
-            if (pointy < CLOTH_SIZE_H - 1)
-            {
-                Segments[segment].First = &(Points[coord]);
-                Segments[segment].Second = &(Points[pointx + (CLOTH_SIZE_W * (pointy + 1))]);
-                Segments[segment].Length = CLOTH_SPACING;
-                segment++;
-            }
-        }
-    }
-
     // Initialize mesh
     Cloth.data.nbPoint = CLOTH_SIZE_H * CLOTH_SIZE_W;
     Cloth.data.pntbl = MeshPoints;
@@ -767,41 +844,8 @@ void DemoInitialize()
     Cloth.data.attbl = jo_malloc(sizeof(ATTR) * Cloth.data.nbPolygon);
     Cloth.data.pltbl = jo_malloc(sizeof(POLYGON) * Cloth.data.nbPolygon);
 
-    for (Uint32 attribute = 0; attribute < Cloth.data.nbPolygon; attribute++)
-    {
-        ATTR attr = ATTRIBUTE(
-            Dual_Plane,
-            SORT_CEN,
-            0,
-            JO_COLOR_RGB(255, 255, 255),
-            CL32KRGB | No_Gouraud,
-            CL32KRGB | MESHoff,
-            sprNoflip,
-            No_Option);
-
-        Cloth.data.attbl[attribute] = attr;
-    }
-    
-    for (int polyx = 0; polyx < CLOTH_SIZE_W - 1; polyx++)
-    {
-        for (int polyy = 0; polyy < CLOTH_SIZE_H - 1; polyy++)
-        {
-            int coord = polyx + ((CLOTH_SIZE_W - 1) * polyy);
-            int coord1 = polyx + (CLOTH_SIZE_W * polyy);
-            int coord2 = polyx + (CLOTH_SIZE_W * polyy) + 1;
-            int coord3 = polyx + (CLOTH_SIZE_W * (polyy + 1)) + 1;
-            int coord4 = polyx + (CLOTH_SIZE_W * (polyy + 1));
-
-            Cloth.data.pltbl[coord].Vertices[0] = coord1;
-            Cloth.data.pltbl[coord].Vertices[1] = coord2;
-            Cloth.data.pltbl[coord].Vertices[2] = coord3;
-            Cloth.data.pltbl[coord].Vertices[3] = coord4;
-
-            Cloth.data.pltbl[coord].norm[X] = 0;
-            Cloth.data.pltbl[coord].norm[Y] = 0;
-            Cloth.data.pltbl[coord].norm[Z] = JO_FIXED_1;
-        }
-    }
+    // Set cloth points
+    ResetCloth();
 }
 
 /** @brief Application entry point
